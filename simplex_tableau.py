@@ -187,7 +187,7 @@ class SimplexTableau:
         max_iter = 100
         
         print("\n" + "="*50)
-        print(" TABELAUS SIMPLEX ".center(50))
+        print(" TABELAU SIMPLEX ".center(50))
         print("="*50)
         titulo, tabela = self.formato_tableau_terminal(0)
         print(f"\n{titulo} (Inicial)")
