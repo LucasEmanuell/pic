@@ -1,9 +1,7 @@
+import os
 import random
 import time
-import os
-import sys
-import math
-from multiprocessing import Pool, Manager
+import multiprocessing as mp
 
 class SegmentTree:
     def __init__(self, size):
@@ -12,28 +10,27 @@ class SegmentTree:
         while self.size < size:
             self.size *= 2
         self.tree = [-10**9] * (2 * self.size)
-    
+
     def update(self, index, value):
         i = self.size + index
         self.tree[i] = value
         i //= 2
         while i:
-            self.tree[i] = max(self.tree[2*i], self.tree[2*i+1])
+            self.tree[i] = max(self.tree[2 * i], self.tree[2 * i + 1])
             i //= 2
-    
+
     def query_index(self, item):
         node = 1
         seg_l = 0
         seg_r = self.size - 1
-        
         while seg_l != seg_r:
-            if self.tree[2*node] >= item:
-                node = 2*node
-                seg_r = (seg_l + seg_r) // 2
+            mid = (seg_l + seg_r) // 2
+            if self.tree[2 * node] >= item:
+                node = 2 * node
+                seg_r = mid
             else:
-                node = 2*node + 1
-                seg_l = (seg_l + seg_r) // 2 + 1
-        
+                node = 2 * node + 1
+                seg_l = mid + 1
         return seg_l if self.tree[node] >= item else -1
 
 def first_fit_fast(items, bin_capacity):
@@ -42,7 +39,6 @@ def first_fit_fast(items, bin_capacity):
     bins = []
     remaining = [-10**9] * n
     count = 0
-    
     for item in items:
         idx = tree.query_index(item)
         if idx == -1 or idx >= count:
@@ -54,196 +50,108 @@ def first_fit_fast(items, bin_capacity):
             bins[idx].append(item)
             remaining[idx] -= item
             tree.update(idx, remaining[idx])
-    
     return bins, count
 
-def read_instance(file_path):
-    with open(file_path, 'r') as f:
-        lines = f.readlines()
-    
-    n = int(lines[0].strip())
-    C = int(lines[1].strip())
-    weights = [int(line.strip()) for line in lines[2:2+n]]
-    
+def generate_permutations(items, total_permutations=1000000):
+    permutations = []
+    permutations.append(sorted(items, reverse=True))  # não-crescente
+    permutations.append(sorted(items))                # não-decrescente
+    for _ in range(total_permutations - 2):
+        permutations.append(random.sample(items, len(items)))
+    return permutations
+
+def process_permutation(args):
+    perm, capacity = args
+    bins, bin_count = first_fit_fast(perm, capacity)
+    return bin_count
+
+def read_instance(filepath):
+    with open(filepath) as f:
+        n = int(f.readline())
+        C = int(f.readline())
+        weights = [int(f.readline()) for _ in range(n)]
     return n, C, weights
 
-def worker_process(args):
-    items, bin_capacity, num_perms, seed = args
-    random.seed(seed)
-    best_bins = float('inf')
-    best_packing = None
-    
-    for _ in range(num_perms):
-        perm = random.sample(items, len(items))
-        bins, bin_count = first_fit_fast(perm, bin_capacity)
-        if bin_count < best_bins:
-            best_bins = bin_count
-            best_packing = bins
-    
-    return best_bins, best_packing
+def save_latex(results, filename="results.tex"):
+    with open(filename, "w") as f:
+        f.write("\\begin{tabular}{|l|c|c|c|c|c|}\n")
+        f.write("\\hline\n")
+        f.write("Instância & n & C & Bins Mín & Bins Máx & Bins Médio \\\\\n")
+        f.write("\\hline\n")
+        for res in results:
+            f.write(f"{res['instance']} & {res['n']} & {res['C']} & {res['min_bins']} & {res['max_bins']} & {res['avg_bins']:.2f} \\\\\n")
+            f.write("\\hline\n")
+        f.write("\\end{tabular}\n")
 
-def main(instance_files):
-    results = []
-    num_workers = os.cpu_count() or 4
-    
-    for file_path in instance_files:
-        n, C, weights = read_instance(file_path)
+def main():
+    import sys
+
+    instances = [file for file in sys.argv[1:] if file.endswith(".txt")]
+    final_results = []
+
+    for instance_file in instances:
+        n, C, weights = read_instance(instance_file)
         total_weight = sum(weights)
-        instance_name = os.path.basename(file_path)
-        
-        exec_times = []
-        bin_counts = []
-        all_packings = []
-        
-        print(f"\nProcessing {instance_name} (n={n}, C={C})...")
-        print("=" * 60)
-        
+
+        min_bins_runs = []
+        max_bins_runs = []
+        avg_bins_runs = []
+        times_runs = []
+
+        print(f"\nProcessing {instance_file} (n={n}, C={C})...")
+        print("="*60)
+
         for run in range(5):
-            start_time = time.time()
-            best_bins = float('inf')
-            best_packing = None
-            
-            # Permutação 1: Não-crescente
-            perm = sorted(weights, reverse=True)
-            bins, bin_count = first_fit_fast(perm, C)
-            if bin_count < best_bins:
-                best_bins = bin_count
-                best_packing = bins
-            
-            # Permutação 2: Não-decrescente
-            perm = sorted(weights)
-            bins, bin_count = first_fit_fast(perm, C)
-            if bin_count < best_bins:
-                best_bins = bin_count
-                best_packing = bins
-            
-            # Permutações aleatórias paralelizadas
-            total_perms = 1000000 - 2
-            perms_per_worker = total_perms // num_workers
-            remainder = total_perms % num_workers
-            seeds = [random.randint(1, 1000000) for _ in range(num_workers)]
-            
-            args_list = []
-            for i in range(num_workers):
-                perms = perms_per_worker + (1 if i < remainder else 0)
-                if perms > 0:
-                    args_list.append((weights, C, perms, seeds[i]))
-            
-            with Pool(processes=num_workers) as pool:
-                worker_results = pool.map(worker_process, args_list)
-            
-            for bins_count, packing in worker_results:
-                if bins_count < best_bins:
-                    best_bins = bins_count
-                    best_packing = packing
-            
-            exec_time = time.time() - start_time
-            exec_times.append(exec_time)
-            bin_counts.append(best_bins)
-            all_packings.append(best_packing)
-            
-            print(f"  Run {run+1}: bins = {best_bins}, time = {exec_time:.2f}s")
-        
-        # Encontrar melhor solução global
-        min_bins = min(bin_counts)
-        best_run_index = bin_counts.index(min_bins)
-        best_packing_global = all_packings[best_run_index]
-        
-        # Calcular métricas
-        max_bins = max(bin_counts)
-        avg_bins = sum(bin_counts) / len(bin_counts)
-        avg_time = sum(exec_times) / len(exec_times)
-        loss_percent = (1 - total_weight / (min_bins * C)) * 100
-        
-        # Armazenar resultados
-        results.append({
-            'instance': instance_name,
-            'n': n,
-            'C': C,
-            'min_bins': min_bins,
-            'max_bins': max_bins,
-            'avg_bins': avg_bins,
-            'loss': loss_percent,
-            'avg_time': avg_time,
-            'packing': best_packing_global,
-            'total_weight': total_weight
+            start = time.time()
+
+            permutations = generate_permutations(weights, total_permutations=1000000)
+
+            # Processa permutações em paralelo
+            pool = mp.Pool(processes=mp.cpu_count())
+            results = pool.map(process_permutation, [(perm, C) for perm in permutations])
+            pool.close()
+            pool.join()
+
+            min_bins = min(results)
+            max_bins = max(results)
+            avg_bins = sum(results) / len(results)
+
+            end = time.time()
+
+            min_bins_runs.append(min_bins)
+            max_bins_runs.append(max_bins)
+            avg_bins_runs.append(avg_bins)
+            times_runs.append(end - start)
+
+            print(f"  Run {run+1}: min_bins = {min_bins}, max_bins = {max_bins}, avg_bins = {avg_bins:.2f}, time = {end-start:.2f}s")
+
+        overall_min_bins = min(min_bins_runs)
+        overall_max_bins = max(max_bins_runs)
+        overall_avg_bins = sum(avg_bins_runs) / len(avg_bins_runs)
+        avg_time = sum(times_runs) / len(times_runs)
+        avg_loss = (1 - total_weight / (overall_min_bins * C)) * 100
+
+        # Exibir resumo
+        print(f"\nSummary for {instance_file}:")
+        print(f"  Bins Min = {overall_min_bins}")
+        print(f"  Bins Max = {overall_max_bins}")
+        print(f"  Bins Avg = {overall_avg_bins:.2f}")
+        print(f"  Average Loss (%) = {avg_loss:.4f}")
+        print(f"  Average Time = {avg_time:.2f}s")
+
+        # Guardar resultado para LaTeX
+        final_results.append({
+            "instance": instance_file,
+            "n": n,
+            "C": C,
+            "min_bins": overall_min_bins,
+            "max_bins": overall_max_bins,
+            "avg_bins": overall_avg_bins,
+            "avg_loss": avg_loss,
+            "avg_time": avg_time,
         })
-    
-    generate_report(results)
 
-def generate_report(results):
-    latex_output = r"""\documentclass{article}
-\usepackage[utf8]{inputenc}
-\usepackage{booktabs}
-\usepackage{longtable}
-\usepackage{array}
-\usepackage{multirow}
-
-\title{Resultados do Problema de Empacotamento de Bins}
-\author{Equipe First Fit}
-\date{}
-
-\begin{document}
-
-\maketitle
-
-\section*{Resultados Gerais}
-
-\begin{longtable}{c c c c c c c c}
-\toprule
-\textbf{Instância} & \textbf{n} & \textbf{C} & \textbf{b\_min} & \textbf{b\_max} & \textbf{b\_avg} & \textbf{\% Perda} & \textbf{Tempo Médio (s)} \\
-\midrule
-"""
-    
-    for res in results:
-        latex_output += (
-            f"{res['instance']} & {res['n']} & {res['C']} & {res['min_bins']} & "
-            f"{res['max_bins']} & {res['avg_bins']:.2f} & {res['loss']:.4f}\% & "
-            f"{res['avg_time']:.2f} \\\\\n"
-        )
-    
-    latex_output += r"""\bottomrule
-\end{longtable}
-
-\newpage
-"""
-    
-    for res in results:
-        packing_str = " \\\\\n".join(
-            [f"Bin {i+1}: {bin_items} (Total: {sum(bin_items)}/{res['C']})" 
-             for i, bin_items in enumerate(res['packing'])]
-        )
-        latex_output += f"""
-\\section*{{Instância {res['instance']}}}
-
-\\begin{{itemize}}
-    \\item Total de itens: {res['n']}
-    \\item Capacidade do bin: {res['C']}
-    \\item Peso total: {res['total_weight']}
-    \\item Número de bins: {res['min_bins']}
-    \\item Percentual de perda: {res['loss']:.4f}\%
-\\end{{itemize}}
-
-Distribuição dos itens:
-
-\\begin{{verbatim}}
-{packing_str}
-\\end{{verbatim}}
-
-\\vspace{{1cm}}
-"""
-    
-    latex_output += r"\end{document}"
-    
-    with open("relatorio.tex", "w") as f:
-        f.write(latex_output)
-    
-    print("\nRelatório LaTeX gerado em 'relatorio.tex'")
-    print("Compile com: pdflatex relatorio.tex")
+    save_latex(final_results, filename="results.tex")
 
 if __name__ == "__main__":
-    if len(sys.argv) < 2:
-        print("Uso: python bin_packing.py <arquivo1> <arquivo2> ...")
-        sys.exit(1)
-    
-    main(sys.argv[1:])
+    main()
